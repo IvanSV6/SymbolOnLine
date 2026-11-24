@@ -1,18 +1,15 @@
-"""Built-in digit trajectories and the user's raw labeled samples."""
+"""Built-in digit trajectories and loading of previously saved samples."""
 
 import json
 from math import isfinite
 from pathlib import Path
 from typing import TypedDict
 
-from PySide6.QtCore import QIODevice, QLockFile, QSaveFile
-
 from recognizer import Point, Strokes, normalize
 
 
 class Sample(TypedDict):
     label: str
-    author: str
     strokes: list[list[Point]]
 
 
@@ -65,11 +62,9 @@ DEMO: dict[str, tuple[Strokes, Strokes]] = {
 def _parse_sample(data: object) -> Sample:
     if not isinstance(data, dict):
         raise ValueError("Ожидалась запись образца")
-    label, author, raw_strokes = data.get("label"), data.get("author"), data.get("strokes")
+    label, raw_strokes = data.get("label"), data.get("strokes")
     if not isinstance(label, str) or label not in DEMO:
         raise ValueError("Некорректная метка цифры")
-    if not isinstance(author, str) or not author.strip():
-        raise ValueError("У образца отсутствует автор")
     if not isinstance(raw_strokes, list):
         raise ValueError("У образца отсутствуют штрихи")
 
@@ -86,7 +81,7 @@ def _parse_sample(data: object) -> Sample:
             stroke.append((float(point[0]), float(point[1])))
         strokes.append(stroke)
     normalize(strokes)
-    return {"label": label, "author": author, "strokes": strokes}
+    return {"label": label, "strokes": strokes}
 
 
 def load_samples(path: Path) -> list[Sample]:
@@ -97,25 +92,3 @@ def load_samples(path: Path) -> list[Sample]:
     if not isinstance(data, list):
         raise ValueError("Ожидался список образцов")
     return [_parse_sample(item) for item in data]
-
-
-def append_sample(path: Path, sample: Sample) -> list[Sample]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock = QLockFile(str(path) + ".lock")
-    if not lock.tryLock(0):
-        raise OSError("Файл образцов занят. Повторите попытку.")
-    try:
-        samples = load_samples(path)
-        samples.append(sample)
-        payload = json.dumps(samples, ensure_ascii=False, indent=2).encode("utf-8")
-        file = QSaveFile(str(path))
-        if not file.open(QIODevice.OpenModeFlag.WriteOnly):
-            raise OSError(file.errorString())
-        if file.write(payload) != len(payload):
-            file.cancelWriting()
-            raise OSError(file.errorString())
-        if not file.commit():
-            raise OSError(file.errorString())
-        return samples
-    finally:
-        lock.unlock()

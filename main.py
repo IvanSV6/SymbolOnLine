@@ -1,15 +1,36 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QStandardPaths, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPen
-from PySide6.QtWidgets import (
-    QApplication, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QVBoxLayout, QWidget,
-)
+from PySide6.QtCore import QPointF, QRectF, QStandardPaths, Qt, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from recognizer import Point, Recognizer, normalize
-from samples import DEMO, Sample, append_sample, load_samples
+from samples import DEMO, load_samples
+
+
+WORKSPACE_STYLE = """
+QWidget#workspace { background: #f5f7fa; }
+QLabel { color: #1b2536; }
+QLabel#brand { font-size: 14px; font-weight: 600; }
+QLabel#heading { font-size: 23px; font-weight: 600; }
+QLabel#instruction, QLabel#status { color: #526078; }
+QWidget#result-panel {
+    background: #edf2ff; border: 1px solid #d6dee9; border-radius: 12px;
+}
+QLabel#result-label { color: #3d4e70; font-weight: 600; }
+QLabel#result { color: #264fc9; font-size: 48px; font-weight: 600; }
+QPushButton {
+    color: #1b2536; background: white; border: 1px solid #c4cfdf;
+    border-radius: 7px; padding: 8px 16px; font-weight: 600;
+}
+QPushButton:hover { background: #e8eef9; }
+QPushButton:pressed { background: #d6e2f8; }
+QPushButton#recognize { color: white; background: #264fc9; border-color: #264fc9; }
+QPushButton#recognize:hover { background: #1f43ad; }
+QPushButton#recognize:pressed { background: #1b378c; }
+QPushButton:focus, QPushButton#recognize:focus { border-color: #121e39; }
+"""
 
 
 class DrawingCanvas(QWidget):
@@ -54,10 +75,16 @@ class DrawingCanvas(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         with QPainter(self) as painter:
-            painter.fillRect(self.rect(), QColor("#ffffff"))
-            painter.setPen(QColor("#cbd5e1"))
-            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            outline = QPainterPath()
+            outline.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+            painter.fillPath(outline, QColor("#ffffff"))
+            painter.setClipPath(outline)
+            painter.setPen(QColor("#d6dfea"))
+            for y in range(8, self.height(), 16):
+                for x in range(8, self.width(), 16):
+                    painter.drawPoint(x, y)
+
             pen = QPen(QColor("#17233c"), 4)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -68,53 +95,78 @@ class DrawingCanvas(QWidget):
                     painter.drawPoint(points[0])
                 else:
                     painter.drawPolyline(points)
+            painter.setClipping(False)
+            painter.strokePath(outline, QPen(QColor("#d6dee9")))
 
 
 class MainWindow(QWidget):
     def __init__(self, sample_path: Path) -> None:
         super().__init__()
-        self.sample_path = sample_path
+        self.setObjectName("workspace")
+        self.setWindowTitle("SymbolOnLine — Распознавание цифр")
+        self.setStyleSheet(WORKSPACE_STYLE)
         self.recognizer = Recognizer()
-        self.demo_templates = [
+        self.recognizer.templates = [
             (label, normalize(strokes))
             for label, variants in DEMO.items()
             for strokes in variants
         ]
-        self.setWindowTitle("Распознавание рукописных цифр")
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-        layout.addWidget(QLabel("Нарисуйте одну цифру от 0 до 9 мышью."))
+        layout.setContentsMargins(24, 18, 24, 22)
+        layout.setSpacing(16)
+        brand = QLabel("SymbolOnLine")
+        brand.setObjectName("brand")
+        layout.addWidget(brand)
+
+        body = QHBoxLayout()
+        body.setSpacing(20)
+        layout.addLayout(body, 1)
+        drawing = QVBoxLayout()
+        drawing.setSpacing(10)
+        body.addLayout(drawing, 1)
+        heading = QLabel("Распознавание цифр")
+        heading.setObjectName("heading")
+        drawing.addWidget(heading)
+        instruction = QLabel("Нарисуйте одну цифру от 0 до 9 мышью.")
+        instruction.setObjectName("instruction")
+        drawing.addWidget(instruction)
         self.canvas = DrawingCanvas()
-        layout.addWidget(self.canvas, 1)
+        drawing.addWidget(self.canvas, 1)
 
         actions = QHBoxLayout()
         recognize = QPushButton("Распознать")
+        recognize.setObjectName("recognize")
         clear = QPushButton("Очистить")
         actions.addWidget(recognize)
         actions.addWidget(clear)
         actions.addStretch()
-        self.result = QLabel()
-        actions.addWidget(self.result)
-        layout.addLayout(actions)
+        drawing.addLayout(actions)
 
-        sample_form = QHBoxLayout()
-        digit_caption = QLabel("Правильная цифра")
-        self.digit = QComboBox()
-        self.digit.addItems(list(DEMO))
-        digit_caption.setBuddy(self.digit)
-        author_caption = QLabel("Автор")
-        self.author = QLineEdit("local")
-        author_caption.setBuddy(self.author)
-        save = QPushButton("Сохранить образец")
-        for widget in (digit_caption, self.digit, author_caption, self.author, save):
-            sample_form.addWidget(widget)
-        layout.addLayout(sample_form)
+        sidebar = QVBoxLayout()
+        sidebar.setSpacing(10)
+        body.addLayout(sidebar)
+        panel = QWidget()
+        panel.setObjectName("result-panel")
+        panel.setMinimumWidth(168)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 14, 16, 14)
+        panel_layout.setSpacing(2)
+        result_label = QLabel("Результат")
+        result_label.setObjectName("result-label")
+        panel_layout.addWidget(result_label)
+        self.result = QLabel("—")
+        self.result.setObjectName("result")
+        self.result.setAccessibleName("Распознанная цифра")
+        self.result.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel_layout.addWidget(self.result)
+        sidebar.addWidget(panel)
 
         self.status = QLabel()
+        self.status.setObjectName("status")
+        self.status.setFixedWidth(168)
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        sidebar.addWidget(self.status)
+        sidebar.addStretch()
         self.storage_warning = QLabel()
         self.storage_warning.setWordWrap(True)
         self.storage_warning.hide()
@@ -122,59 +174,32 @@ class MainWindow(QWidget):
 
         recognize.clicked.connect(self.recognize)
         clear.clicked.connect(self.canvas.clear)
-        save.clicked.connect(self.save_sample)
-        self.canvas.changed.connect(self.result.clear)
-        self.canvas.changed.connect(self.status.clear)
+        self.canvas.changed.connect(self.reset_result)
 
         try:
-            samples = load_samples(self.sample_path)
+            samples = load_samples(sample_path)
         except (OSError, ValueError, OverflowError) as error:
             samples = []
             self.storage_warning.setText(f"Не удалось загрузить свои образцы. {error}")
             self.storage_warning.show()
-        self._set_templates(samples)
-        self.resize(620, 540)
-
-    def _set_templates(self, samples: list[Sample]) -> None:
-        self.recognizer.templates = self.demo_templates + [
+        self.recognizer.templates.extend(
             (sample["label"], normalize(sample["strokes"])) for sample in samples
-        ]
+        )
+        self.resize(800, 535)
+
+    def reset_result(self) -> None:
+        self.result.setText("—")
+        self.status.clear()
 
     def recognize(self) -> None:
         try:
             label = self.recognizer.predict(self.canvas.strokes)
         except ValueError as error:
-            self.result.clear()
+            self.result.setText("—")
             self.status.setText(str(error))
             return
         self.status.clear()
-        self.result.setText(f"Результат: {label}")
-
-    def save_sample(self) -> None:
-        try:
-            normalize(self.canvas.strokes)
-        except ValueError as error:
-            self.status.setText(str(error))
-            return
-        author = self.author.text().strip()
-        if not author:
-            self.status.setText("Укажите автора образца")
-            return
-
-        sample: Sample = {
-            "label": self.digit.currentText(),
-            "author": author,
-            "strokes": [stroke.copy() for stroke in self.canvas.strokes],
-        }
-        try:
-            samples = append_sample(self.sample_path, sample)
-        except (OSError, ValueError, OverflowError) as error:
-            self.status.setText(f"Не удалось сохранить образец. {error}")
-            return
-        self._set_templates(samples)
-        self.storage_warning.hide()
-        self.result.clear()
-        self.status.setText(f"Образец цифры {sample['label']} сохранён")
+        self.result.setText(label)
 
 
 def main() -> int:
