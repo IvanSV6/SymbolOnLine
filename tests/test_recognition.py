@@ -1,6 +1,7 @@
 """Mouse paths traced from the five reported screenshots, in canvas coordinates."""
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PySide6.QtCore import QPoint, Qt
@@ -67,11 +68,38 @@ class RecognitionTests(unittest.TestCase):
         recognize = window.findChild(QPushButton, "recognize")
         QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
         self.assertEqual(window.result.text(), "7")
+        probabilities = self.model.predict_probabilities(canvas.strokes)
+        self.assertEqual(set(probabilities), set("0123456789"))
+        self.assertAlmostEqual(sum(probabilities.values()), 1)
+        for label, probability in probabilities.items():
+            digit_label, value = window.probability_rows[label]
+            self.assertEqual(digit_label.isVisible(), probability > 0.01)
+            self.assertEqual(value.isVisible(), probability > 0.01)
+            if value.isVisible():
+                shown = value.text().removesuffix(" %").replace(",", ".")
+                self.assertAlmostEqual(float(shown), 100 * probability, delta=0.005)
         clear = next(button for button in window.findChildren(QPushButton)
                      if button.text() == "Очистить")
         QTest.mouseClick(clear, Qt.MouseButton.LeftButton)
         self.assertEqual(canvas.strokes, [])
         self.assertEqual(window.result.text(), "—")
+        self.assertTrue(window.probability_panel.isHidden())
         QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
         self.assertEqual(window.status.text(), "Нарисуйте цифру")
+        window.close()
+
+    def test_probability_cutoff_before_rounding(self):
+        window = MainWindow()
+        window.show()
+        probabilities = dict.fromkeys("0123456789", 0.0)
+        probabilities.update({"0": 0.01, "1": 0.01001, "2": 0.00999, "3": 0.97})
+        with patch.object(window.recognizer, "predict_probabilities", return_value=probabilities):
+            window.recognize()
+        self.app.processEvents()
+        visible = [digit for digit, _ in window.probability_rows.values() if digit.isVisible()]
+        self.assertEqual([digit.text() for digit in sorted(visible, key=lambda w: w.y())], ["3", "1"])
+        result_panel = window.result.parentWidget()
+        self.assertEqual(result_panel.y(), window.canvas.y())
+        self.assertGreater(window.probability_panel.y(), result_panel.geometry().bottom())
+        self.assertEqual(window.result.text(), "3")
         window.close()

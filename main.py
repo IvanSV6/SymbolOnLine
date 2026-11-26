@@ -2,7 +2,7 @@ import sys
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from recognizer import Point, Recognizer, draw_stroke
 
@@ -10,13 +10,19 @@ from recognizer import Point, Recognizer, draw_stroke
 WORKSPACE_STYLE = """
 QWidget#workspace { background: #f5f7fa; }
 QLabel { color: #1b2536; }
-QLabel#brand { font-size: 14px; font-weight: 600; }
 QLabel#heading { font-size: 23px; font-weight: 600; }
 QLabel#instruction, QLabel#status { color: #526078; }
 QWidget#result-panel {
     background: #edf2ff; border: 1px solid #d6dee9; border-radius: 12px;
 }
-QLabel#result-label { color: #3d4e70; font-weight: 600; }
+QWidget#probability-panel { background: white; border: 1px solid #d6dee9; border-radius: 12px; }
+QLabel#result-label, QLabel#probability-label { color: #3d4e70; font-weight: 600; }
+QLabel#probability-label { font-size: 15px; padding-bottom: 4px; }
+QLabel#probability-digit {
+    background: #edf2ff; color: #264fc9; border-radius: 6px;
+    min-width: 26px; padding: 2px 0; font-size: 16px; font-weight: 600;
+}
+QLabel#probability-value { color: #263b61; font-size: 16px; font-weight: 600; }
 QLabel#result { color: #264fc9; font-size: 48px; font-weight: 600; }
 QPushButton {
     color: #1b2536; background: white; border: 1px solid #c4cfdf;
@@ -102,10 +108,13 @@ class MainWindow(QWidget):
         self.recognizer = Recognizer()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 18, 24, 22)
-        layout.setSpacing(16)
-        brand = QLabel("SymbolOnLine")
-        brand.setObjectName("brand")
-        layout.addWidget(brand)
+        layout.setSpacing(10)
+        heading = QLabel("Распознавание цифр")
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+        instruction = QLabel("Нарисуйте одну цифру от 0 до 9 мышью.")
+        instruction.setObjectName("instruction")
+        layout.addWidget(instruction)
 
         body = QHBoxLayout()
         body.setSpacing(20)
@@ -113,12 +122,6 @@ class MainWindow(QWidget):
         drawing = QVBoxLayout()
         drawing.setSpacing(10)
         body.addLayout(drawing, 1)
-        heading = QLabel("Распознавание цифр")
-        heading.setObjectName("heading")
-        drawing.addWidget(heading)
-        instruction = QLabel("Нарисуйте одну цифру от 0 до 9 мышью.")
-        instruction.setObjectName("instruction")
-        drawing.addWidget(instruction)
         self.canvas = DrawingCanvas()
         drawing.addWidget(self.canvas, 1)
 
@@ -150,6 +153,30 @@ class MainWindow(QWidget):
         panel_layout.addWidget(self.result)
         sidebar.addWidget(panel)
 
+        self.probability_panel = QWidget()
+        self.probability_panel.setObjectName("probability-panel")
+        self.probability_grid = QGridLayout(self.probability_panel)
+        self.probability_grid.setContentsMargins(16, 14, 16, 14)
+        self.probability_grid.setVerticalSpacing(6)
+        self.probability_grid.setColumnStretch(1, 1)
+        heading = QLabel("Вероятности")
+        heading.setObjectName("probability-label")
+        self.probability_grid.addWidget(heading, 0, 0, 1, 2)
+        self.probability_rows = {}
+        for digit in range(10):
+            label = str(digit)
+            digit_label = QLabel(label)
+            digit_label.setObjectName("probability-digit")
+            digit_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value = QLabel()
+            value.setObjectName("probability-value")
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            value.setAccessibleName(f"Вероятность цифры {label}")
+            self.probability_grid.addWidget(digit_label, digit + 1, 0)
+            self.probability_grid.addWidget(value, digit + 1, 1)
+            self.probability_rows[label] = digit_label, value
+        sidebar.addWidget(self.probability_panel)
+
         self.status = QLabel()
         self.status.setObjectName("status")
         self.status.setFixedWidth(168)
@@ -161,21 +188,35 @@ class MainWindow(QWidget):
         clear.clicked.connect(self.canvas.clear)
         self.canvas.changed.connect(self.reset_result)
 
+        self.reset_result()
         self.resize(800, 535)
 
     def reset_result(self) -> None:
         self.result.setText("—")
+        self.probability_panel.hide()
         self.status.clear()
 
     def recognize(self) -> None:
         try:
-            label = self.recognizer.predict(self.canvas.strokes)
+            probabilities = self.recognizer.predict_probabilities(self.canvas.strokes)
         except ValueError as error:
-            self.result.setText("—")
+            self.reset_result()
             self.status.setText(str(error))
             return
         self.status.clear()
-        self.result.setText(label)
+        ranked = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
+        self.result.setText(ranked[0][0])
+        for row, (label, probability) in enumerate(ranked, start=1):
+            digit_label, value = self.probability_rows[label]
+            self.probability_grid.addWidget(digit_label, row, 0)
+            self.probability_grid.addWidget(value, row, 1)
+            visible = probability > 0.01
+            digit_label.setVisible(visible)
+            value.setVisible(visible)
+            if visible:
+                percent = f"{probability * 100:.2f}".replace(".", ",")
+                value.setText(f"{percent} %")
+        self.probability_panel.show()
 
 
 def main() -> int:

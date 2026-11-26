@@ -72,11 +72,17 @@ class Recognizer:
         with np.load(MODEL, allow_pickle=False) as archive:
             self.weights = dict(archive)
 
-    def predict(self, strokes: Strokes) -> str:
+    def predict_probabilities(self, strokes: Strokes) -> dict[str, float]:
         weights = self.weights
         image = rasterize(strokes)[None]
         for layer in ("conv1", "conv2"):
             image = _conv_pool(image, weights[layer + ".weight"], weights[layer + ".bias"])
         features = np.maximum(weights["embed.weight"] @ image.ravel() + weights["embed.bias"], 0)
         scores = weights["head.weight"] @ features + weights["head.bias"]
-        return str(weights["labels"][scores.argmax()])
+        relative = np.exp((scores - scores.max()).astype(np.float64))
+        probabilities = relative / relative.sum()
+        return {str(label): float(p) for label, p in zip(weights["labels"], probabilities)}
+
+    def predict(self, strokes: Strokes) -> str:
+        probabilities = self.predict_probabilities(strokes)
+        return max(probabilities, key=probabilities.__getitem__)
