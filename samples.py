@@ -1,11 +1,10 @@
 """Built-in digit trajectories and loading of previously saved samples."""
 
 import json
-from math import isfinite
 from pathlib import Path
 from typing import TypedDict
 
-from recognizer import Point, Strokes, normalize
+from recognizer import Point, Strokes, normalized_strokes
 
 
 class Sample(TypedDict):
@@ -75,12 +74,12 @@ def _parse_sample(data: object) -> Sample:
         stroke = []
         for point in raw_stroke:
             if not isinstance(point, list) or len(point) != 2 or not all(
-                type(value) in (int, float) and isfinite(value) for value in point
+                type(value) in (int, float) for value in point
             ):
                 raise ValueError("Некорректные координаты штриха")
             stroke.append((float(point[0]), float(point[1])))
         strokes.append(stroke)
-    normalize(strokes)
+    normalized_strokes(strokes)
     return {"label": label, "strokes": strokes}
 
 

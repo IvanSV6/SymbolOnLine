@@ -5,8 +5,8 @@ from PySide6.QtCore import QPointF, QRectF, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from recognizer import Point, Recognizer, normalize
-from samples import DEMO, load_samples
+from recognizer import Point, Recognizer, draw_stroke
+from samples import load_samples
 
 
 WORKSPACE_STYLE = """
@@ -90,11 +90,7 @@ class DrawingCanvas(QWidget):
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             for stroke in self.strokes:
-                points = [QPointF(*point) for point in stroke]
-                if len(points) == 1:
-                    painter.drawPoint(points[0])
-                else:
-                    painter.drawPolyline(points)
+                draw_stroke(painter, stroke)
             painter.setClipping(False)
             painter.strokePath(outline, QPen(QColor("#d6dee9")))
 
@@ -106,11 +102,6 @@ class MainWindow(QWidget):
         self.setWindowTitle("SymbolOnLine — Распознавание цифр")
         self.setStyleSheet(WORKSPACE_STYLE)
         self.recognizer = Recognizer()
-        self.recognizer.templates = [
-            (label, normalize(strokes))
-            for label, variants in DEMO.items()
-            for strokes in variants
-        ]
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 18, 24, 22)
         layout.setSpacing(16)
@@ -167,24 +158,18 @@ class MainWindow(QWidget):
         self.status.setWordWrap(True)
         sidebar.addWidget(self.status)
         sidebar.addStretch()
-        self.storage_warning = QLabel()
-        self.storage_warning.setWordWrap(True)
-        self.storage_warning.hide()
-        layout.addWidget(self.storage_warning)
 
         recognize.clicked.connect(self.recognize)
         clear.clicked.connect(self.canvas.clear)
         self.canvas.changed.connect(self.reset_result)
 
         try:
-            samples = load_samples(sample_path)
+            for sample in load_samples(sample_path):
+                self.recognizer.add_sample(sample["label"], sample["strokes"])
         except (OSError, ValueError, OverflowError) as error:
-            samples = []
-            self.storage_warning.setText(f"Не удалось загрузить свои образцы. {error}")
-            self.storage_warning.show()
-        self.recognizer.templates.extend(
-            (sample["label"], normalize(sample["strokes"])) for sample in samples
-        )
+            warning = QLabel(f"Не удалось загрузить свои образцы. {error}")
+            warning.setWordWrap(True)
+            layout.addWidget(warning)
         self.resize(800, 535)
 
     def reset_result(self) -> None:

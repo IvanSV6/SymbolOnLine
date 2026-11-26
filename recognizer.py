@@ -1,89 +1,99 @@
-"""Template-based $P recognizer for trajectories of isolated digits."""
+"""Rasterize handwriting and classify it with the bundled convolutional network."""
 
 from collections.abc import Sequence
-from math import dist, isfinite, isqrt
+from pathlib import Path
+
+import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QImage, QPainter, QPen, QPolygonF
 
 type Point = tuple[float, float]
 type Strokes = Sequence[Sequence[Point]]
-type Cloud = list[Point]
+
+MODEL = Path(__file__).with_name("digits.npz")
 
 
-def resample(strokes: Strokes, n: int = 32) -> Cloud:
-    """Sample at equal distances along the drawn segments."""
-    if n < 2:
-        raise ValueError("Resampling requires at least two points")
+def draw_stroke(painter: QPainter, stroke: Sequence[Point] | np.ndarray) -> None:
+    line = QPolygonF([QPointF(x, y) for x, y in stroke])
+    if len(line) == 1:
+        painter.drawPoint(line[0])
+    else:
+        painter.drawPolyline(line)
 
-    segments = []
-    total = 0.0
-    for stroke in strokes:
-        for start, end in zip(stroke, stroke[1:]):
-            length = dist(start, end)
-            if length > 0:
-                segments.append((start, end, total, total + length))
-                total += length
-    if not segments:
+
+def normalized_strokes(strokes: Strokes) -> list[np.ndarray]:
+    """Center the drawing at the origin and scale its longest side to one."""
+    paths = [np.asarray(stroke, dtype=float) for stroke in strokes if len(stroke)]
+    if not paths:
         raise ValueError("Нарисуйте цифру")
-    if not isfinite(total):
-        raise ValueError("Некорректная длина штрихов")
-
-    points = [segments[0][0]]
-    segment_index = 0
-    for index in range(1, n - 1):
-        target = total * (index / (n - 1))
-        while segments[segment_index][3] < target:
-            segment_index += 1
-        start, end, before, after = segments[segment_index]
-        fraction = (target - before) / (after - before)
-        points.append((
-            start[0] + fraction * (end[0] - start[0]),
-            start[1] + fraction * (end[1] - start[1]),
-        ))
-    points.append(segments[-1][1])
-    return points
-
-
-def normalize(strokes: Strokes) -> Cloud:
-    points = resample(strokes)
-    xs, ys = zip(*points)
-    min_x, min_y = min(xs), min(ys)
-    scale = max(max(xs) - min_x, max(ys) - min_y)
-    if not isfinite(scale) or scale == 0:
+    points = np.concatenate(paths)
+    if not np.isfinite(points).all():
+        raise ValueError("Некорректные координаты штриха")
+    if not any(np.any(path != path[0]) for path in paths):
+        raise ValueError("Нарисуйте цифру")
+    low = points.min(axis=0)
+    span = points.max(axis=0) - low
+    scale = span.max()
+    if not np.isfinite(scale):
         raise ValueError("Некорректный размер рисунка")
-    scaled = [((x - min_x) / scale, (y - min_y) / scale) for x, y in points]
-    center_x = sum(x for x, _ in scaled) / len(scaled)
-    center_y = sum(y for _, y in scaled) / len(scaled)
-    return [(x - center_x, y - center_y) for x, y in scaled]
+    center = 0.5 * (span / scale)
+    return [(path - low) / scale - center for path in paths]
 
 
-def cloud_distance(a: Cloud, b: Cloud, start: int) -> float:
-    n = len(a)
-    used = [False] * n
-    total = 0.0
-    for offset in range(n):
-        point = a[(start + offset) % n]
-        distance, index = min(
-            (dist(point, other), j)
-            for j, other in enumerate(b)
-            if not used[j]
-        )
-        used[index] = True
-        total += (1 - offset / n) * distance
-    return total
+def rasterize(strokes: Strokes) -> np.ndarray:
+    """Fit the ink into a centered 26-pixel square on a 32-pixel canvas."""
+    paths = normalized_strokes(strokes)
+
+    # Supersample solid ink. Overlapping strokes form a union.
+    image = QImage(128, 128, QImage.Format.Format_Grayscale8)
+    image.fill(Qt.GlobalColor.black)
+    pen = QPen(Qt.GlobalColor.white, 8, Qt.PenStyle.SolidLine,
+               Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    with QPainter(image) as painter:
+        painter.setPen(pen)
+        for path in paths:
+            draw_stroke(painter, path * 104 + 64)
+    pixels = np.frombuffer(image.constBits(), dtype=np.uint8).reshape(32, 4, 32, 4)
+    return pixels.mean(axis=(1, 3), dtype=np.float32) / 255
 
 
-def cloud_match(a: Cloud, b: Cloud) -> float:
-    step = isqrt(len(a))
-    return min(
-        min(cloud_distance(a, b, start), cloud_distance(b, a, start))
-        for start in range(0, len(a), step)
-    )
+def _conv_pool(image, weight, bias):
+    windows = sliding_window_view(image, (3, 3), axis=(1, 2))
+    features = np.einsum("chwkl,ockl->ohw", windows, weight, optimize=True)
+    features = np.maximum(features + bias[:, None, None], 0)
+    channels, height, width = features.shape
+    h, w = height // 2, width // 2
+    return features[:, :2*h, :2*w].reshape(channels, h, 2, w, 2).max(axis=(2, 4))
+
+
+def _unit_vector(features: np.ndarray) -> np.ndarray:
+    return features / max(np.linalg.norm(features), 1e-8)
 
 
 class Recognizer:
     def __init__(self) -> None:
-        self.templates: list[tuple[str, Cloud]] = []
+        with np.load(MODEL, allow_pickle=False) as archive:
+            self.weights = dict(archive)
+        self.personal: list[tuple[str, np.ndarray]] = []
+
+    def _features(self, strokes: Strokes) -> np.ndarray:
+        weights = self.weights
+        image = rasterize(strokes)[None]
+        for layer in ("conv1", "conv2"):
+            image = _conv_pool(image, weights[layer + ".weight"], weights[layer + ".bias"])
+        return np.maximum(weights["embed.weight"] @ image.ravel() + weights["embed.bias"], 0)
+
+    def add_sample(self, label: str, strokes: Strokes) -> None:
+        self.personal.append((label, _unit_vector(self._features(strokes))))
 
     def predict(self, strokes: Strokes) -> str:
-        cloud = normalize(strokes)
-        label, _ = min(self.templates, key=lambda template: cloud_match(cloud, template[1]))
-        return label
+        features = self._features(strokes)
+        if self.personal:
+            unit = _unit_vector(features)
+            label, similarity = max(((label, float(sample @ unit)) for label, sample in self.personal),
+                                    key=lambda pair: pair[1])
+            if similarity >= self.weights["threshold"]:
+                return label
+        scores = self.weights["head.weight"] @ features + self.weights["head.bias"]
+        return str(self.weights["labels"][scores.argmax()])
