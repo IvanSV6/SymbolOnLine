@@ -88,6 +88,27 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(window.status.text(), "Нарисуйте цифру")
         window.close()
 
+    def test_first_stroke_after_recognition_replaces_drawing(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.show()
+        canvas = window.canvas
+        left = Qt.MouseButton.LeftButton
+        QTest.mousePress(canvas, left, pos=QPoint(10, 10))
+        QTest.mouseRelease(canvas, left, pos=QPoint(10, 90))
+        QTest.mouseClick(window.findChild(QPushButton, "recognize"), left)
+        self.assertEqual(canvas.strokes, [[(10, 10), (10, 90)]])
+        self.assertTrue(window.probability_panel.isVisible())
+
+        QTest.mousePress(canvas, left, pos=QPoint(20, 30))
+        self.assertEqual(canvas.strokes, [[(20, 30)]])
+        self.assertEqual(window.result.text(), "—")
+        self.assertTrue(window.probability_panel.isHidden())
+        QTest.mouseRelease(canvas, left, pos=QPoint(60, 30))
+        QTest.mousePress(canvas, left, pos=QPoint(60, 30))
+        QTest.mouseRelease(canvas, left, pos=QPoint(40, 90))
+        self.assertEqual(canvas.strokes, [[(20, 30), (60, 30)], [(60, 30), (40, 90)]])
+
     def test_probability_cutoff_before_rounding(self):
         window = MainWindow()
         window.show()

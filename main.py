@@ -44,6 +44,7 @@ class DrawingCanvas(QWidget):
         super().__init__()
         self.strokes: list[list[Point]] = []
         self._active = False
+        self.clear_on_next_stroke = False
         self.setMinimumSize(360, 340)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setAccessibleName("Холст для рисования цифры")
@@ -51,11 +52,15 @@ class DrawingCanvas(QWidget):
     def clear(self) -> None:
         self.strokes.clear()
         self._active = False
+        self.clear_on_next_stroke = False
         self.changed.emit()
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if self.clear_on_next_stroke:
+                self.strokes.clear()
+                self.clear_on_next_stroke = False
             position = event.position()
             self.strokes.append([(position.x(), position.y())])
             self._active = True
@@ -103,7 +108,7 @@ class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("workspace")
-        self.setWindowTitle("SymbolOnLine — Распознавание цифр")
+        self.setWindowTitle("Распознавание символов")
         self.setStyleSheet(WORKSPACE_STYLE)
         self.recognizer = Recognizer()
         layout = QVBoxLayout(self)
@@ -217,6 +222,7 @@ class MainWindow(QWidget):
                 percent = f"{probability * 100:.2f}".replace(".", ",")
                 value.setText(f"{percent} %")
         self.probability_panel.show()
+        self.canvas.clear_on_next_stroke = True
 
 
 def main() -> int:
