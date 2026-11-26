@@ -8,18 +8,18 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from recognizer import MODEL, rasterize
+from recognizer import DIGIT_MODEL, rasterize
 from samples import DEMO
 from training.pendigits import records
 
 
 class Network(nn.Module):
-    def __init__(self):
+    def __init__(self, classes=10, channels=12, features=64):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 12, 3)
-        self.conv2 = nn.Conv2d(12, 24, 3)
-        self.embed = nn.Linear(24 * 6 * 6, 64)
-        self.head = nn.Linear(64, 10)
+        self.conv1 = nn.Conv2d(1, channels, 3)
+        self.conv2 = nn.Conv2d(channels, 2 * channels, 3)
+        self.embed = nn.Linear(2 * channels * 6 * 6, features)
+        self.head = nn.Linear(features, classes)
 
     def forward(self, x):
         x = F.max_pool2d(self.conv1(x).relu(), 2)
@@ -77,6 +77,6 @@ def train(archive, output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
-    parser.add_argument("--output", default=MODEL, type=Path)
+    parser.add_argument("--output", default=DIGIT_MODEL, type=Path)
     args = parser.parse_args()
     train(args.archive, args.output)

@@ -9,7 +9,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from main import MainWindow
-from recognizer import Recognizer, rasterize
+from recognizer import GROUPS, SYMBOLS, Recognizer, rasterize
 from samples import DEMO
 
 EXAMPLES = {
@@ -41,23 +41,44 @@ class RecognitionTests(unittest.TestCase):
         for label, variants in DEMO.items():
             for strokes in variants:
                 with self.subTest(label=label, strokes=strokes):
-                    self.assertEqual(self.model.predict(strokes), label)
+                    self.assertEqual(self.model.predict(strokes, GROUPS["Цифры"]), label)
         for label, strokes in EXAMPLES.items():
             with self.subTest(label=label):
-                self.assertEqual(self.model.predict(strokes), label)
+                self.assertEqual(self.model.predict(strokes, GROUPS["Цифры"]), label)
                 transformed = [[(2*x + 11, 2*y - 25) for x, y in reversed(path)]
                                for path in reversed(strokes)]
-                self.assertEqual(self.model.predict(transformed), label)
+                self.assertEqual(self.model.predict(transformed, GROUPS["Цифры"]), label)
                 np.testing.assert_array_equal(rasterize(strokes), rasterize(transformed))
 
     def test_invalid_input(self):
-        for drawing in ([], [[(10, 20)]], [[(1, 1), (1, 1)]], [[(0, 0), (np.nan, 2)]]):
+        for drawing in ([], [[]], [[(0, 0), (np.nan, 2)]]):
             with self.assertRaises(ValueError):
                 self.model.predict(drawing)
+
+    def test_auto_symbols_and_group_probabilities(self):
+        drawings = {
+            ".": [[(90, 40)]],
+            "A": [[(10, 100), (45, 10), (80, 100)], [(24, 65), (66, 65)]],
+            "i": [[(35, 48), (35, 100)], [(35, 23)]],
+            ":": [[(45, 30)], [(45, 80)]],
+            ",": [[(10, 10), (13, 12), (14, 17), (11, 23), (4, 31)]],
+        }
+        for label, strokes in drawings.items():
+            with self.subTest(label=label):
+                probabilities = self.model.predict_probabilities(strokes)
+                self.assertEqual(set(probabilities), set(SYMBOLS))
+                self.assertAlmostEqual(sum(probabilities.values()), 1)
+                self.assertEqual(max(probabilities, key=probabilities.get), label)
+        for alphabet in GROUPS.values():
+            with self.subTest(alphabet=alphabet):
+                probabilities = self.model.predict_probabilities(drawings["A"], alphabet)
+                self.assertEqual(set(probabilities), set(alphabet))
+                self.assertAlmostEqual(sum(probabilities.values()), 1)
 
     def test_window_recognize_and_clear(self):
         window = MainWindow()
         window.show()
+        window.group.setCurrentText("Цифры")
         canvas = window.canvas
         for stroke in EXAMPLES["7"]:
             points = [QPoint(x - 210, y - 229) for x, y in stroke]
@@ -68,10 +89,13 @@ class RecognitionTests(unittest.TestCase):
         recognize = window.findChild(QPushButton, "recognize")
         QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
         self.assertEqual(window.result.text(), "7")
-        probabilities = self.model.predict_probabilities(canvas.strokes)
+        probabilities = self.model.predict_probabilities(canvas.strokes, GROUPS["Цифры"])
         self.assertEqual(set(probabilities), set("0123456789"))
         self.assertAlmostEqual(sum(probabilities.values()), 1)
         for label, probability in probabilities.items():
+            if probability <= 0.01:
+                self.assertNotIn(label, window.probability_rows)
+                continue
             digit_label, value = window.probability_rows[label]
             self.assertEqual(digit_label.isVisible(), probability > 0.01)
             self.assertEqual(value.isVisible(), probability > 0.01)
@@ -85,8 +109,19 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(window.result.text(), "—")
         self.assertTrue(window.probability_panel.isHidden())
         QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
-        self.assertEqual(window.status.text(), "Нарисуйте цифру")
+        self.assertEqual(window.status.text(), "Нарисуйте символ")
         window.close()
+
+    def test_click_is_a_period_in_window(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.show()
+        QTest.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(80, 80))
+        QTest.mouseClick(window.findChild(QPushButton, "recognize"), Qt.MouseButton.LeftButton)
+        self.assertEqual(window.result.text(), ".")
+        self.assertTrue(window.probability_rows["."][0].isVisible())
+        window.group.setCurrentText("Знаки")
+        self.assertEqual(window.result.text(), ".")
 
     def test_first_stroke_after_recognition_replaces_drawing(self):
         window = MainWindow()

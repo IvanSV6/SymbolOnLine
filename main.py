@@ -2,9 +2,12 @@ import sys
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QVBoxLayout, QWidget,
+)
 
-from recognizer import Point, Recognizer, draw_stroke
+from recognizer import GROUPS, Point, Recognizer, draw_stroke
 
 
 WORKSPACE_STYLE = """
@@ -47,7 +50,7 @@ class DrawingCanvas(QWidget):
         self.clear_on_next_stroke = False
         self.setMinimumSize(360, 340)
         self.setCursor(Qt.CursorShape.CrossCursor)
-        self.setAccessibleName("Холст для рисования цифры")
+        self.setAccessibleName("Холст для рисования символа")
 
     def clear(self) -> None:
         self.strokes.clear()
@@ -114,12 +117,20 @@ class MainWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 18, 24, 22)
         layout.setSpacing(10)
-        heading = QLabel("Распознавание цифр")
+        heading = QLabel("Распознавание символов")
         heading.setObjectName("heading")
         layout.addWidget(heading)
-        instruction = QLabel("Нарисуйте одну цифру от 0 до 9 мышью.")
+        options = QHBoxLayout()
+        instruction = QLabel("Нарисуйте букву, цифру или знак. Для точки щёлкните мышью.")
         instruction.setObjectName("instruction")
-        layout.addWidget(instruction)
+        instruction.setWordWrap(True)
+        options.addWidget(instruction, 1)
+        self.group = QComboBox()
+        self.group.setAccessibleName("Группа символов")
+        for name, alphabet in GROUPS.items():
+            self.group.addItem(name, alphabet)
+        options.addWidget(self.group)
+        layout.addLayout(options)
 
         body = QHBoxLayout()
         body.setSpacing(20)
@@ -153,33 +164,31 @@ class MainWindow(QWidget):
         panel_layout.addWidget(result_label)
         self.result = QLabel("—")
         self.result.setObjectName("result")
-        self.result.setAccessibleName("Распознанная цифра")
+        self.result.setAccessibleName("Распознанный символ")
+        self.result.setTextFormat(Qt.TextFormat.PlainText)
         self.result.setAlignment(Qt.AlignmentFlag.AlignCenter)
         panel_layout.addWidget(self.result)
         sidebar.addWidget(panel)
 
         self.probability_panel = QWidget()
         self.probability_panel.setObjectName("probability-panel")
-        self.probability_grid = QGridLayout(self.probability_panel)
-        self.probability_grid.setContentsMargins(16, 14, 16, 14)
-        self.probability_grid.setVerticalSpacing(6)
-        self.probability_grid.setColumnStretch(1, 1)
+        probability_layout = QVBoxLayout(self.probability_panel)
+        probability_layout.setContentsMargins(16, 14, 16, 14)
         heading = QLabel("Вероятности")
         heading.setObjectName("probability-label")
-        self.probability_grid.addWidget(heading, 0, 0, 1, 2)
+        probability_layout.addWidget(heading)
+        rows = QWidget()
+        self.probability_grid = QGridLayout(rows)
+        self.probability_grid.setContentsMargins(0, 0, 0, 0)
+        self.probability_grid.setVerticalSpacing(6)
+        self.probability_grid.setColumnStretch(1, 1)
+        self.probability_scroll = QScrollArea()
+        self.probability_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.probability_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.probability_scroll.setWidgetResizable(True)
+        self.probability_scroll.setWidget(rows)
+        probability_layout.addWidget(self.probability_scroll)
         self.probability_rows = {}
-        for digit in range(10):
-            label = str(digit)
-            digit_label = QLabel(label)
-            digit_label.setObjectName("probability-digit")
-            digit_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            value = QLabel()
-            value.setObjectName("probability-value")
-            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            value.setAccessibleName(f"Вероятность цифры {label}")
-            self.probability_grid.addWidget(digit_label, digit + 1, 0)
-            self.probability_grid.addWidget(value, digit + 1, 1)
-            self.probability_rows[label] = digit_label, value
         sidebar.addWidget(self.probability_panel)
 
         self.status = QLabel()
@@ -192,6 +201,7 @@ class MainWindow(QWidget):
         recognize.clicked.connect(self.recognize)
         clear.clicked.connect(self.canvas.clear)
         self.canvas.changed.connect(self.reset_result)
+        self.group.currentIndexChanged.connect(self.group_changed)
 
         self.reset_result()
         self.resize(800, 535)
@@ -201,9 +211,15 @@ class MainWindow(QWidget):
         self.probability_panel.hide()
         self.status.clear()
 
+    def group_changed(self) -> None:
+        if self.canvas.clear_on_next_stroke:
+            self.recognize()
+        else:
+            self.reset_result()
+
     def recognize(self) -> None:
         try:
-            probabilities = self.recognizer.predict_probabilities(self.canvas.strokes)
+            probabilities = self.recognizer.predict_probabilities(self.canvas.strokes, self.group.currentData())
         except ValueError as error:
             self.reset_result()
             self.status.setText(str(error))
@@ -211,16 +227,31 @@ class MainWindow(QWidget):
         self.status.clear()
         ranked = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
         self.result.setText(ranked[0][0])
-        for row, (label, probability) in enumerate(ranked, start=1):
-            digit_label, value = self.probability_rows[label]
-            self.probability_grid.addWidget(digit_label, row, 0)
+        for symbol, value in self.probability_rows.values():
+            symbol.hide()
+            value.hide()
+        for row, (label, probability) in enumerate(ranked):
+            if probability <= 0.01:
+                break
+            if label not in self.probability_rows:
+                symbol = QLabel(label)
+                symbol.setTextFormat(Qt.TextFormat.PlainText)
+                symbol.setObjectName("probability-digit")
+                symbol.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                value = QLabel()
+                value.setObjectName("probability-value")
+                value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                value.setAccessibleName(f"Вероятность символа {label}")
+                self.probability_rows[label] = symbol, value
+            symbol, value = self.probability_rows[label]
+            self.probability_grid.addWidget(symbol, row, 0)
             self.probability_grid.addWidget(value, row, 1)
-            visible = probability > 0.01
-            digit_label.setVisible(visible)
-            value.setVisible(visible)
-            if visible:
-                percent = f"{probability * 100:.2f}".replace(".", ",")
-                value.setText(f"{percent} %")
+            percent = f"{probability * 100:.2f}".replace(".", ",")
+            value.setText(f"{percent} %")
+            symbol.show()
+            value.show()
+        self.probability_scroll.setFixedHeight(min(self.probability_grid.sizeHint().height(), 220))
+        self.probability_scroll.verticalScrollBar().setValue(0)
         self.probability_panel.show()
         self.canvas.clear_on_next_stroke = True
 
