@@ -67,33 +67,16 @@ def _conv_pool(image, weight, bias):
     return features[:, :2*h, :2*w].reshape(channels, h, 2, w, 2).max(axis=(2, 4))
 
 
-def _unit_vector(features: np.ndarray) -> np.ndarray:
-    return features / max(np.linalg.norm(features), 1e-8)
-
-
 class Recognizer:
     def __init__(self) -> None:
         with np.load(MODEL, allow_pickle=False) as archive:
             self.weights = dict(archive)
-        self.personal: list[tuple[str, np.ndarray]] = []
 
-    def _features(self, strokes: Strokes) -> np.ndarray:
+    def predict(self, strokes: Strokes) -> str:
         weights = self.weights
         image = rasterize(strokes)[None]
         for layer in ("conv1", "conv2"):
             image = _conv_pool(image, weights[layer + ".weight"], weights[layer + ".bias"])
-        return np.maximum(weights["embed.weight"] @ image.ravel() + weights["embed.bias"], 0)
-
-    def add_sample(self, label: str, strokes: Strokes) -> None:
-        self.personal.append((label, _unit_vector(self._features(strokes))))
-
-    def predict(self, strokes: Strokes) -> str:
-        features = self._features(strokes)
-        if self.personal:
-            unit = _unit_vector(features)
-            label, similarity = max(((label, float(sample @ unit)) for label, sample in self.personal),
-                                    key=lambda pair: pair[1])
-            if similarity >= self.weights["threshold"]:
-                return label
-        scores = self.weights["head.weight"] @ features + self.weights["head.bias"]
-        return str(self.weights["labels"][scores.argmax()])
+        features = np.maximum(weights["embed.weight"] @ image.ravel() + weights["embed.bias"], 0)
+        scores = weights["head.weight"] @ features + weights["head.bias"]
+        return str(weights["labels"][scores.argmax()])

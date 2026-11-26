@@ -1,12 +1,10 @@
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QStandardPaths, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from recognizer import Point, Recognizer, draw_stroke
-from samples import load_samples
 
 
 WORKSPACE_STYLE = """
@@ -96,7 +94,7 @@ class DrawingCanvas(QWidget):
 
 
 class MainWindow(QWidget):
-    def __init__(self, sample_path: Path) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.setObjectName("workspace")
         self.setWindowTitle("SymbolOnLine — Распознавание цифр")
@@ -163,13 +161,6 @@ class MainWindow(QWidget):
         clear.clicked.connect(self.canvas.clear)
         self.canvas.changed.connect(self.reset_result)
 
-        try:
-            for sample in load_samples(sample_path):
-                self.recognizer.add_sample(sample["label"], sample["strokes"])
-        except (OSError, ValueError, OverflowError) as error:
-            warning = QLabel(f"Не удалось загрузить свои образцы. {error}")
-            warning.setWordWrap(True)
-            layout.addWidget(warning)
         self.resize(800, 535)
 
     def reset_result(self) -> None:
@@ -190,8 +181,7 @@ class MainWindow(QWidget):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("SymbolOnLine")
-    data_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
-    window = MainWindow(Path(data_dir) / "samples.json")
+    window = MainWindow()
     window.show()
     return app.exec()
 

@@ -1,8 +1,5 @@
 """Mouse paths traced from the five reported screenshots, in canvas coordinates."""
 
-import json
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
 
 import numpy as np
@@ -57,29 +54,24 @@ class RecognitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.model.predict(drawing)
 
-    def test_window_and_persisted_samples(self):
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "samples.json"
-            # A conflicting personal label verifies that loading actually affects the result.
-            path.write_text(json.dumps([{"label": "3", "strokes": EXAMPLES["7"]}]), encoding="utf8")
-            for _ in range(2):
-                window = MainWindow(path)
-                window.show()
-                canvas = window.canvas
-                for stroke in EXAMPLES["7"]:
-                    points = [QPoint(x - 210, y - 229) for x, y in stroke]
-                    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=points[0])
-                    for point in points[1:-1]:
-                        QTest.mouseMove(canvas, point)
-                    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=points[-1])
-                recognize = window.findChild(QPushButton, "recognize")
-                QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
-                self.assertEqual(window.result.text(), "3")
-                clear = next(button for button in window.findChildren(QPushButton)
-                             if button.text() == "Очистить")
-                QTest.mouseClick(clear, Qt.MouseButton.LeftButton)
-                self.assertEqual(canvas.strokes, [])
-                self.assertEqual(window.result.text(), "—")
-                QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
-                self.assertEqual(window.status.text(), "Нарисуйте цифру")
-                window.close()
+    def test_window_recognize_and_clear(self):
+        window = MainWindow()
+        window.show()
+        canvas = window.canvas
+        for stroke in EXAMPLES["7"]:
+            points = [QPoint(x - 210, y - 229) for x, y in stroke]
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=points[0])
+            for point in points[1:-1]:
+                QTest.mouseMove(canvas, point)
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=points[-1])
+        recognize = window.findChild(QPushButton, "recognize")
+        QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.result.text(), "7")
+        clear = next(button for button in window.findChildren(QPushButton)
+                     if button.text() == "Очистить")
+        QTest.mouseClick(clear, Qt.MouseButton.LeftButton)
+        self.assertEqual(canvas.strokes, [])
+        self.assertEqual(window.result.text(), "—")
+        QTest.mouseClick(recognize, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.status.text(), "Нарисуйте цифру")
+        window.close()

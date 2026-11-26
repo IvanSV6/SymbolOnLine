@@ -1,15 +1,6 @@
-"""Built-in digit trajectories and loading of previously saved samples."""
+"""Reference trajectories for training and regression tests."""
 
-import json
-from pathlib import Path
-from typing import TypedDict
-
-from recognizer import Point, Strokes, normalized_strokes
-
-
-class Sample(TypedDict):
-    label: str
-    strokes: list[list[Point]]
+from recognizer import Strokes
 
 
 # Two manually drawn paths per digit in a common coordinate system.
@@ -56,38 +47,3 @@ DEMO: dict[str, tuple[Strokes, Strokes]] = {
         [[(7, 6), (4, 7), (1, 5), (1, 3), (3, 1), (6, 1), (8, 3), (7, 7), (7, 10)]],
     ),
 }
-
-
-def _parse_sample(data: object) -> Sample:
-    if not isinstance(data, dict):
-        raise ValueError("Ожидалась запись образца")
-    label, raw_strokes = data.get("label"), data.get("strokes")
-    if not isinstance(label, str) or label not in DEMO:
-        raise ValueError("Некорректная метка цифры")
-    if not isinstance(raw_strokes, list):
-        raise ValueError("У образца отсутствуют штрихи")
-
-    strokes = []
-    for raw_stroke in raw_strokes:
-        if not isinstance(raw_stroke, list) or not raw_stroke:
-            raise ValueError("Некорректный штрих")
-        stroke = []
-        for point in raw_stroke:
-            if not isinstance(point, list) or len(point) != 2 or not all(
-                type(value) in (int, float) for value in point
-            ):
-                raise ValueError("Некорректные координаты штриха")
-            stroke.append((float(point[0]), float(point[1])))
-        strokes.append(stroke)
-    normalized_strokes(strokes)
-    return {"label": label, "strokes": strokes}
-
-
-def load_samples(path: Path) -> list[Sample]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    if not isinstance(data, list):
-        raise ValueError("Ожидался список образцов")
-    return [_parse_sample(item) for item in data]
