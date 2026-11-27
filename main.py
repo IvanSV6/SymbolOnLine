@@ -3,11 +3,11 @@ import sys
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
-from recognizer import GROUPS, Point, Recognizer, draw_stroke
+from recognizer import GROUPS, WRITING_GUIDES, Point, Recognizer, draw_stroke
 
 
 WORKSPACE_STYLE = """
@@ -48,6 +48,7 @@ class DrawingCanvas(QWidget):
         self.strokes: list[list[Point]] = []
         self._active = False
         self.clear_on_next_stroke = False
+        self.guides = WRITING_GUIDES
         self.setMinimumSize(360, 340)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setAccessibleName("Холст для рисования символа")
@@ -97,6 +98,13 @@ class DrawingCanvas(QWidget):
                 for x in range(8, self.width(), 16):
                     painter.drawPoint(x, y)
 
+            if self.guides is not None:
+                upper, baseline = self.guides
+                painter.setPen(QPen(QColor("#b3c5db"), 1, Qt.PenStyle.DashLine))
+                painter.drawLine(QPointF(0, upper), QPointF(self.width(), upper))
+                painter.setPen(QPen(QColor("#91a9c5"), 1))
+                painter.drawLine(QPointF(0, baseline), QPointF(self.width(), baseline))
+
             pen = QPen(QColor("#17233c"), 4)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -125,12 +133,18 @@ class MainWindow(QWidget):
         instruction.setObjectName("instruction")
         instruction.setWordWrap(True)
         options.addWidget(instruction, 1)
+        self.guide_toggle = QCheckBox("Разлиновка")
+        self.guide_toggle.setChecked(True)
+        options.addWidget(self.guide_toggle)
         self.group = QComboBox()
         self.group.setAccessibleName("Группа символов")
         for name, alphabet in GROUPS.items():
             self.group.addItem(name, alphabet)
         options.addWidget(self.group)
         layout.addLayout(options)
+        self.guide_hint = QLabel("Пишите строчные между линиями, прописные — выше верхней линии.")
+        self.guide_hint.setWordWrap(True)
+        layout.addWidget(self.guide_hint)
 
         body = QHBoxLayout()
         body.setSpacing(20)
@@ -201,7 +215,8 @@ class MainWindow(QWidget):
         recognize.clicked.connect(self.recognize)
         clear.clicked.connect(self.canvas.clear)
         self.canvas.changed.connect(self.reset_result)
-        self.group.currentIndexChanged.connect(self.group_changed)
+        self.group.currentIndexChanged.connect(self.recognition_options_changed)
+        self.guide_toggle.toggled.connect(self.toggle_guides)
 
         self.reset_result()
         self.resize(800, 535)
@@ -211,7 +226,13 @@ class MainWindow(QWidget):
         self.probability_panel.hide()
         self.status.clear()
 
-    def group_changed(self) -> None:
+    def toggle_guides(self, enabled: bool) -> None:
+        self.canvas.guides = WRITING_GUIDES if enabled else None
+        self.canvas.update()
+        self.guide_hint.setVisible(enabled)
+        self.recognition_options_changed()
+
+    def recognition_options_changed(self) -> None:
         if self.canvas.clear_on_next_stroke:
             self.recognize()
         else:
@@ -219,7 +240,9 @@ class MainWindow(QWidget):
 
     def recognize(self) -> None:
         try:
-            probabilities = self.recognizer.predict_probabilities(self.canvas.strokes, self.group.currentData())
+            probabilities = self.recognizer.predict_probabilities(
+                self.canvas.strokes, self.group.currentData(), guides=self.canvas.guides
+            )
         except ValueError as error:
             self.reset_result()
             self.status.setText(str(error))

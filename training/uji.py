@@ -4,7 +4,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 
-def records(archive: Path, split: str):
+def writer_records(archive: Path, split: str):
     with ZipFile(archive) as source:
         lines = iter(source.read("ujipenchars2.txt").decode("utf-8").splitlines())
     for line in lines:
@@ -20,4 +20,9 @@ def records(archive: Path, split: str):
             coords = [int(value) * 16 / units_per_mm for value in fields]
             strokes.append(list(zip(coords[::2], coords[1::2])))
         if label.isascii() and session.startswith(split + "_"):
-            yield label, strokes
+            yield session.rsplit("-", 1)[0], label, strokes
+
+
+def records(archive: Path, split: str):
+    for _, label, strokes in writer_records(archive, split):
+        yield label, strokes

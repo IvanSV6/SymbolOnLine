@@ -7,7 +7,7 @@ from types import ModuleType
 
 import numpy as np
 
-from recognizer import GROUPS, SYMBOLS, Recognizer
+from recognizer import GROUPS, SYMBOLS, WRITING_GUIDES, Recognizer
 from samples import DEMO
 from training.pendigits import records
 from training import uji
@@ -23,12 +23,36 @@ def baseline():
     return model
 
 
+def compare_guides(archive):
+    model = Recognizer()
+    totals = Counter()
+    correct = [Counter(), Counter()]
+    case_errors = [0, 0]
+    for label, strokes in uji.records(archive, "tst"):
+        totals[label] += 1
+        for i, guides in enumerate((None, WRITING_GUIDES)):
+            pred = model.predict(strokes, guides=guides)
+            correct[i][label] += pred == label
+            case_errors[i] += pred != label and label.isalpha() and pred.lower() == label.lower()
+    print("Class / count / correct (free) / correct (guided)")
+    for label in "CcZzOo0,'":
+        print(label, totals[label], correct[0][label], correct[1][label])
+    print("Total", totals.total(), correct[0].total(), correct[1].total())
+    print("Case errors:", *case_errors)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive")
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--uji", action="store_true", help="Evaluate all supported ASCII characters on UJI test writers")
+    parser.add_argument("--compare-guides", action="store_true", help="Compare free and guided writing on UJI test writers")
     args = parser.parse_args()
+    if args.compare_guides:
+        if args.baseline:
+            parser.error("The baseline only supports Pendigits")
+        compare_guides(args.archive)
+        raise SystemExit(0)
     if args.uji:
         if args.baseline:
             parser.error("The baseline only supports Pendigits")

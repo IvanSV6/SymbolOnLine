@@ -1,6 +1,7 @@
 """Rasterize handwriting and classify it with the bundled convolutional network."""
 
 from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path
 from string import ascii_lowercase, ascii_uppercase, digits
 
@@ -14,6 +15,8 @@ type Strokes = Sequence[Sequence[Point]]
 
 DIGIT_MODEL = Path(__file__).with_name("digits.npz")
 MODEL = Path(__file__).with_name("symbols.npz")
+GUIDE_MODEL = Path(__file__).with_name("guides.npz")
+WRITING_GUIDES = (120.0, 203.2)
 PUNCTUATION = """.,;:?!'"()%-@$<>"""
 SYMBOL_MIN_SPAN = 60
 SYMBOLS = digits + ascii_uppercase + ascii_lowercase + PUNCTUATION
@@ -76,6 +79,18 @@ def _conv_pool(image, weight, bias):
     return features[:, :2*h, :2*w].reshape(channels, h, 2, w, 2).max(axis=(2, 4))
 
 
+def guide_features(strokes: Strokes, guides: tuple[float, float]) -> np.ndarray:
+    upper, baseline = guides
+    gap = baseline - upper
+    if not np.isfinite(gap) or gap <= 0:
+        raise ValueError("Некорректное положение направляющих")
+    ys = [y for stroke in strokes for _, y in stroke]
+    if not ys:
+        raise ValueError("Нарисуйте символ")
+    bottom = max(ys)
+    return np.array([(bottom - min(ys)) / gap, (bottom - baseline) / gap], dtype=np.float32)
+
+
 class Recognizer:
     def __init__(self) -> None:
         with np.load(MODEL, allow_pickle=False) as archive:
@@ -83,14 +98,21 @@ class Recognizer:
         with np.load(DIGIT_MODEL, allow_pickle=False) as archive:
             self.digit_weights = dict(archive)
 
+    @cached_property
+    def guide_weights(self):
+        with np.load(GUIDE_MODEL, allow_pickle=False) as archive:
+            return dict(archive)
+
     @staticmethod
-    def _probabilities(image: np.ndarray, weights, alphabet: str) -> dict[str, float]:
+    def _scores(image: np.ndarray, weights) -> np.ndarray:
         image = image[None]
         for layer in ("conv1", "conv2"):
             image = _conv_pool(image, weights[layer + ".weight"], weights[layer + ".bias"])
         features = np.maximum(weights["embed.weight"] @ image.ravel() + weights["embed.bias"], 0)
-        scores = weights["head.weight"] @ features + weights["head.bias"]
-        labels = weights["labels"]
+        return weights["head.weight"] @ features + weights["head.bias"]
+
+    @staticmethod
+    def _probabilities(scores, labels, alphabet: str) -> dict[str, float]:
         selected = [i for i, label in enumerate(labels) if label in alphabet]
         if not selected:
             raise ValueError("В группе нет поддерживаемых символов")
@@ -99,18 +121,30 @@ class Recognizer:
         probabilities = relative / relative.sum()
         return {str(label): float(p) for label, p in zip(labels[selected], probabilities)}
 
-    def predict_probabilities(self, strokes: Strokes, alphabet: str = SYMBOLS) -> dict[str, float]:
+    def predict_probabilities(self, strokes: Strokes, alphabet: str = SYMBOLS, *,
+                              guides: tuple[float, float] | None = None) -> dict[str, float]:
         if alphabet == digits:
-            return self._probabilities(rasterize(strokes), self.digit_weights, digits)
+            scores = self._scores(rasterize(strokes), self.digit_weights)
+            return self._probabilities(scores, self.digit_weights["labels"], digits)
+        geometry = guide_features(strokes, guides) if guides is not None else None
         image = rasterize(strokes, min_span=SYMBOL_MIN_SPAN)
-        probabilities = self._probabilities(image, self.weights, alphabet)
+        scores = self._scores(image, self.weights)
+        if geometry is not None:
+            # A single tap represents a period anywhere on the canvas.
+            if geometry[0] > 0 or len({x for stroke in strokes for x, _ in stroke}) > 1:
+                w = self.guide_weights
+                hidden = np.maximum(w["hidden.weight"] @ geometry + w["hidden.bias"], 0)
+                scores += w["strength"] * (w["output.weight"] @ hidden + w["output.bias"])
+        probabilities = self._probabilities(scores, self.weights["labels"], alphabet)
         if alphabet == SYMBOLS:
             # The combined model estimates P(digit). The specialist supplies P(class | digit).
             digit_mass = sum(probabilities[digit] for digit in digits)
-            digit_probs = self._probabilities(image, self.digit_weights, digits)
+            digit_scores = self._scores(image, self.digit_weights)
+            digit_probs = self._probabilities(digit_scores, self.digit_weights["labels"], digits)
             probabilities.update({digit: digit_mass * p for digit, p in digit_probs.items()})
         return probabilities
 
-    def predict(self, strokes: Strokes, alphabet: str = SYMBOLS) -> str:
-        probabilities = self.predict_probabilities(strokes, alphabet)
+    def predict(self, strokes: Strokes, alphabet: str = SYMBOLS, *,
+                guides: tuple[float, float] | None = None) -> str:
+        probabilities = self.predict_probabilities(strokes, alphabet, guides=guides)
         return max(probabilities, key=probabilities.__getitem__)

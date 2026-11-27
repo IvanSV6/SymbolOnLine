@@ -7,7 +7,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from main import MainWindow
-from recognizer import GROUPS, SYMBOLS, Recognizer, rasterize
+from recognizer import GROUPS, SYMBOLS, WRITING_GUIDES, Recognizer, guide_features, rasterize
 from samples import DEMO
 
 
@@ -31,6 +31,42 @@ class RecognitionTests(unittest.TestCase):
         for drawing in ([], [[]], [[(0, 0), (np.nan, 2)]]):
             with self.assertRaises(ValueError):
                 self.model.predict(drawing)
+
+    def test_geometry_and_position_independent_modes(self):
+        upper, baseline = WRITING_GUIDES
+        strokes = [[(15, upper), (50, baseline)], [(20, 160), (40, 160)]]
+        np.testing.assert_allclose(guide_features(strokes, WRITING_GUIDES), [1, 0])
+        digits = GROUPS["Цифры"]
+        self.assertEqual(self.model.predict_probabilities(strokes, digits),
+                         self.model.predict_probabilities(strokes, digits, guides=WRITING_GUIDES))
+        for alphabet in (SYMBOLS, GROUPS["Знаки"]):
+            for y in (10, baseline, 330):
+                self.assertEqual(self.model.predict([[(80, y)]], alphabet, guides=WRITING_GUIDES), ".")
+
+    def test_guides_toggle_and_resize_on_existing_ink(self):
+        window = MainWindow()
+        self.addCleanup(window.close)
+        window.show()
+        canvas = window.canvas
+        self.assertTrue(window.guide_toggle.isChecked())
+        points = [QPoint(x, y + 70) for x, y in [(72, 0), (74, 4), (73, 10), (68, 19), (61, 24)]]
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=points[0])
+        for point in points[1:-1]:
+            QTest.mouseMove(canvas, point)
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=points[-1])
+        QTest.mouseClick(window.findChild(QPushButton, "recognize"), Qt.MouseButton.LeftButton)
+        self.assertEqual(window.result.text(), "'")
+        window.resize(960, 640)
+        self.app.processEvents()
+        guided_pixel = canvas.grab().toImage().pixelColor(100, 203)
+        window.guide_toggle.click()
+        self.assertNotEqual(canvas.grab().toImage().pixelColor(100, 203), guided_pixel)
+        self.assertEqual(window.result.text(), ",")
+        window.guide_toggle.click()
+        self.assertEqual(window.result.text(), "'")
+        self.assertEqual(canvas.guides, WRITING_GUIDES)
+        self.assertEqual(canvas.strokes, [[(p.x(), p.y()) for p in points]])
+        self.assertTrue(canvas.clear_on_next_stroke)
 
     def test_auto_symbols_and_group_probabilities(self):
         drawings = {
